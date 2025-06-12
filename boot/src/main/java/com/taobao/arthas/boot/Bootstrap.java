@@ -620,7 +620,7 @@ public class Bootstrap {
                 AnsiLog.info("The target process already listen port {}, skip attach.", bootstrap.getTelnetPortOrDefault());
             } else {
 
-                // 启动 arthas-core.jar
+                // 启动 arthas-core.jar(对应的启动类com.taobao.arthas.core.Arthas)
                 List<String> attachArgs = new ArrayList<String>();
                 attachArgs.add("-jar");
                 attachArgs.add(new File(arthasHomeDir, "arthas-core.jar").getAbsolutePath());
@@ -686,7 +686,7 @@ public class Bootstrap {
                 AnsiLog.info("Try to attach process " + pid);
                 // 输出启动 arthas-core.jar 的参数信息
                 AnsiLog.debug("Start arthas-core.jar args: " + attachArgs);
-                // 启动 Arthas 核心程序
+                // 启动 Arthas 核心程序（注意往里看，里面启动了子进程）
                 ProcessUtils.startArthasCore(pid, attachArgs);
 
                 // 输出附加成功的信息

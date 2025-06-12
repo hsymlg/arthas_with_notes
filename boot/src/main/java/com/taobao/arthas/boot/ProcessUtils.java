@@ -136,22 +136,29 @@ public class ProcessUtils {
     /**
      * 通过jps命令列出Java进程
      *
-     * @param v 是否显示JVM参数
+     * 该方法使用jps命令获取系统中运行的Java进程列表，
+     * 支持过滤当前进程自身和jps命令进程，确保返回的是目标Java进程
+     *
+     * @param v 是否显示JVM参数（-v选项）
      * @return 进程ID到进程信息的映射（LinkedHashMap保持顺序）
      */
     private static Map<Long, String> listProcessByJps(boolean v) {
         Map<Long, String> result = new LinkedHashMap<Long, String>();
+        // 使用LinkedHashMap保存结果，确保插入顺序（便于后续用户选择）
 
         // 查找jps命令的路径，优先使用找到的绝对路径
         String jps = "jps";
         File jpsFile = findJps();
         if (jpsFile != null) {
             jps = jpsFile.getAbsolutePath();
+            // 使用绝对路径调用jps命令，避免PATH环境变量影响
         }
 
         AnsiLog.debug("尝试使用jps列出Java进程，jps路径: " + jps);
 
-        // 构建jps命令参数（-l显示完整类名，-v显示JVM参数）
+        // 构建jps命令参数
+        // -l: 输出主类的完整包名或JAR文件的完整路径名
+        // -v: 输出JVM参数（如果v为true）
         String[] command = null;
         if (v) {
             command = new String[] { jps, "-v", "-l" };
@@ -161,28 +168,46 @@ public class ProcessUtils {
 
         // 执行jps命令并获取输出结果
         List<String> lines = ExecutingCommand.runNative(command);
+        // runNative方法执行本地命令并返回输出行列表
 
         AnsiLog.debug("jps命令执行结果: " + lines);
 
         // 获取当前进程ID，用于过滤自身
         long currentPid = Long.parseLong(PidUtils.currentPid());
+        // PidUtils.currentPid()返回当前进程的PID字符串
+
+        // 解析jps命令输出的每一行
         for (String line : lines) {
             String[] strings = line.trim().split("\\s+");
+            // 使用正则表达式"\s+"分割字符串，处理多个空格的情况
+
             if (strings.length < 1) {
                 continue; // 跳过空行
             }
+
             try {
+                // 解析进程ID
                 long pid = Long.parseLong(strings[0]);
+
+                // 过滤当前进程自身
                 if (pid == currentPid) {
-                    continue; // 跳过当前进程
-                }
-                if (strings.length >= 2 && isJpsProcess(strings[1])) {
-                    continue; // 跳过jps进程本身
+                    continue;
                 }
 
-                result.put(pid, line); // 添加有效进程到结果集
+                // 过滤jps命令进程本身
+                if (strings.length >= 2 && isJpsProcess(strings[1])) {
+                    // isJpsProcess方法判断是否为jps命令的主类
+                    continue;
+                }
+
+                // 将有效进程添加到结果映射中
+                result.put(pid, line);
+                // key: 进程ID，value: jps输出的完整行（包含进程信息）
+
             } catch (Throwable e) {
-                // 忽略解析异常，继续处理下一个进程（处理jps输出可能的格式问题）
+                // 忽略解析异常，继续处理下一个进程
+                // 处理jps输出可能的格式问题（如特殊字符、不规范输出等）
+                AnsiLog.debug("解析jps输出时发生异常，跳过该行: " + line, e);
             }
         }
 
@@ -252,87 +277,125 @@ public class ProcessUtils {
     /**
      * 启动Arthas核心到目标Java进程（通过Java进程附加方式）
      *
-     * @param targetPid 目标进程ID
-     * @param attachArgs 附加参数（如端口、IP等配置）
+     * 该方法通过启动一个新的Java进程，使用Java Attach API将Arthas核心库注入目标进程，
+     * 实现非侵入式诊断功能。适用于Java 6及以上版本，支持不同Java环境的自动适配。
+     *
+     * @param targetPid 目标Java进程的PID
+     * @param attachArgs 附加参数（包含Arthas核心启动配置，如端口、IP、核心库路径等）
      */
     public static void startArthasCore(long targetPid, List<String> attachArgs) {
-        // 查找Java Home路径
+        // --------------------- 环境准备阶段 ---------------------
+        // 查找Java Home路径（优先系统属性，其次环境变量，自动处理Java版本差异）
         String javaHome = findJavaHome();
+        // findJavaHome方法会自动：
+        // 1. 从System.getProperty("java.home")获取
+        // 2. 检查Java 8及以下是否存在tools.jar
+        // 3. 若不存在则尝试从环境变量JAVA_HOME查找
+        // 4. 最终返回有效的Java Home路径
 
-        // 查找java可执行文件
+        // 在Java Home中查找java可执行文件（支持不同系统和目录结构）
         File javaPath = findJava(javaHome);
         if (javaPath == null) {
+            // 未找到java可执行文件时抛出异常并提示用户
             throw new IllegalArgumentException(
                     "在java home下未找到java/java.exe可执行文件: " + javaHome);
         }
 
-        // 查找tools.jar（仅Java 8及以下需要）
+        // 查找tools.jar（仅Java 8及以下需要，Java 9+不需要）
         File toolsJar = findToolsJar(javaHome);
 
+        // 检查Java版本并验证tools.jar存在性（Java 8及以下必需）
         if (JavaVersionUtils.isLessThanJava9()) {
             if (toolsJar == null || !toolsJar.exists()) {
                 throw new IllegalArgumentException("在java home下未找到tools.jar: " + javaHome);
             }
         }
 
-        // 构建启动命令（从java可执行文件开始）
+        // --------------------- 命令构建阶段 ---------------------
+        // 初始化启动命令列表（从java可执行文件开始）
         List<String> command = new ArrayList<String>();
         command.add(javaPath.getAbsolutePath());
+        // 添加java可执行文件的绝对路径，确保跨平台兼容性
 
-        // 如果存在tools.jar，添加到引导类路径（Java 8及以下需要）
+        // 若存在tools.jar（Java 8及以下），添加到引导类路径
         if (toolsJar != null && toolsJar.exists()) {
             command.add("-Xbootclasspath/a:" + toolsJar.getAbsolutePath());
+            // -Xbootclasspath/a: 表示将指定路径添加到引导类路径的末尾
+            // 用于在Java 8及以下环境中加载Arthas所需的附加类
         }
 
-        command.addAll(attachArgs); // 添加Arthas核心启动参数
+        // 添加Arthas核心启动参数（由调用方传入，如端口、IP、核心库路径等）
+        command.addAll(attachArgs);
+        // attachArgs通常包含：
+        // -jar arthas-core.jar
+        // -pid ${targetPid}
+        // -telnet-port ${port}
+        // 等Arthas核心启动参数
 
-        // 创建进程构建器并清空JAVA_TOOL_OPTIONS环境变量（避免干扰）
+        // --------------------- 进程启动阶段 ---------------------
+        // 创建进程构建器并配置环境变量
         ProcessBuilder pb = new ProcessBuilder(command);
+        // 清空JAVA_TOOL_OPTIONS环境变量，避免外部配置干扰Arthas启动
         pb.environment().put("JAVA_TOOL_OPTIONS", "");
+
         try {
-            // 启动进程
+            // 启动Java进程（执行构建好的命令）
             final Process proc = pb.start();
 
-            // 重定向子进程的标准输出到当前进程的标准输出
+            // --------------------- 输出重定向阶段 ---------------------
+            // 创建线程重定向子进程的标准输出到当前进程的标准输出
             Thread redirectStdout = new Thread(new Runnable() {
                 @Override
                 public void run() {
+                    //相对于当前进程而言的，而非子进程，这个需要注意，当前进程的输入
                     InputStream inputStream = proc.getInputStream();
                     try {
+                        // 使用IOUtils.copy将子进程输出复制到System.out
                         IOUtils.copy(inputStream, System.out);
                     } catch (IOException e) {
+                        // 异常时关闭输入流
                         IOUtils.close(inputStream);
                     }
                 }
             });
 
-            // 重定向子进程的标准错误到当前进程的标准错误
+            // 创建线程重定向子进程的标准错误到当前进程的标准错误
             Thread redirectStderr = new Thread(new Runnable() {
                 @Override
                 public void run() {
                     InputStream inputStream = proc.getErrorStream();
                     try {
+                        // 使用IOUtils.copy将子进程错误输出复制到System.err
                         IOUtils.copy(inputStream, System.err);
                     } catch (IOException e) {
+                        // 异常时关闭输入流
                         IOUtils.close(inputStream);
                     }
                 }
             });
+
+            // 启动重定向线程
             redirectStdout.start();
             redirectStderr.start();
+            // 等待重定向线程完成（确保输出全部读取）
             redirectStdout.join();
-            redirectStderr.join(); // 等待重定向线程完成
+            redirectStderr.join();
 
-            // 检查子进程退出码，非0表示启动失败
+            // --------------------- 进程状态检查阶段 ---------------------
+            // 获取子进程退出码
             int exitValue = proc.exitValue();
             if (exitValue != 0) {
+                // 非0退出码表示Arthas核心启动失败
                 AnsiLog.error("attach失败，目标PID: " + targetPid);
-                System.exit(1); // 退出当前进程
+                System.exit(1); // 退出当前进程，终止启动流程
             }
         } catch (Throwable e) {
-            // 忽略异常（确保主程序不崩溃）
+            // 捕获所有可能的异常（如IOException、InterruptedException等）
+            // 由于Arthas是诊断工具，此处忽略异常以避免阻塞主流程
+            // 实际错误会通过子进程输出重定向显示
         }
     }
+
 
     /**
      * 启动Arthas客户端（Telnet连接工具）
@@ -462,57 +525,65 @@ public class ProcessUtils {
     /**
      * 查找jps命令（用于列出Java进程）
      *
+     * 该方法会先在java.home中查找jps命令，若未找到则尝试在环境变量JAVA_HOME中查找，
+     * 支持Windows/Linux/MacOS不同系统的路径格式，返回路径最短的有效jps命令
+     *
      * @return 找到的jps命令文件，未找到返回null
      */
     private static File findJps() {
-        // 首先在java.home中查找jps命令
+        // 首先在System.getProperty("java.home")中查找jps命令
         String javaHome = System.getProperty("java.home");
+        // 定义jps命令可能的路径（支持不同系统和目录结构）
         String[] paths = { "bin/jps", "bin/jps.exe", "../bin/jps", "../bin/jps.exe" };
 
+        // 存储找到的jps命令文件
         List<File> jpsList = new ArrayList<File>();
+        // 遍历所有可能的路径
         for (String path : paths) {
             File jpsFile = new File(javaHome, path);
             if (jpsFile.exists()) {
-                AnsiLog.debug("找到jps命令: " + jpsFile.getAbsolutePath());
-                jpsList.add(jpsFile);
+                AnsiLog.debug("在java.home中找到jps命令: " + jpsFile.getAbsolutePath());
+                jpsList.add(jpsFile); // 添加到结果列表
             }
         }
 
-        // 在java.home中未找到jps，尝试在环境变量JAVA_HOME中查找
+        // 在java.home中未找到jps命令，尝试在环境变量JAVA_HOME中查找
         if (jpsList.isEmpty()) {
-            AnsiLog.debug("在以下路径未找到jps: " + javaHome);
+            AnsiLog.debug("在java.home路径下未找到jps: " + javaHome);
             String javaHomeEnv = System.getenv("JAVA_HOME");
             AnsiLog.debug("尝试在环境变量JAVA_HOME中查找jps: " + javaHomeEnv);
+            // 再次遍历路径，使用JAVA_HOME作为基础路径
             for (String path : paths) {
                 File jpsFile = new File(javaHomeEnv, path);
                 if (jpsFile.exists()) {
-                    AnsiLog.debug("找到jps命令: " + jpsFile.getAbsolutePath());
-                    jpsList.add(jpsFile);
+                    AnsiLog.debug("在JAVA_HOME中找到jps命令: " + jpsFile.getAbsolutePath());
+                    jpsList.add(jpsFile); // 添加到结果列表
                 }
             }
         }
 
-        // 未找到jps命令
+        // 未找到任何jps命令
         if (jpsList.isEmpty()) {
             AnsiLog.debug("在当前java home下未找到jps: " + javaHome);
             return null;
         }
 
-        // 找到多个jps命令时，选择路径最短的
+        // 找到多个jps命令时，选择路径最短的（通常jre路径比jdk长，优先使用jdk中的jps）
         if (jpsList.size() > 1) {
             Collections.sort(jpsList, new Comparator<File>() {
                 @Override
                 public int compare(File file1, File file2) {
                     try {
+                        // 按文件规范路径的长度排序
                         return file1.getCanonicalPath().length() - file2.getCanonicalPath().length();
                     } catch (IOException e) {
-                        // 忽略异常，默认返回-1
+                        AnsiLog.debug("获取文件路径时发生异常，使用默认排序", e);
                     }
-                    return -1;
+                    return -1; // 默认为file1优先
                 }
             });
         }
-        return jpsList.get(0); // 返回路径最短的jps命令
+        return jpsList.get(0); // 返回路径最短的jps命令文件
     }
 
     /**
