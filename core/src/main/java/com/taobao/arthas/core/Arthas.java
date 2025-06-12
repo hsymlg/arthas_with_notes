@@ -186,6 +186,9 @@ public class Arthas {
             configure.setArthasCore(encodeArg(configure.getArthasCore()));
             try {
                 // 将Arthas代理加载到目标Java虚拟机中，并传递核心JAR包路径和配置信息
+                // 跨进程通信：通过 Attach API 连接目标 JVM，并请求加载 Agent。
+                // Agent 初始化：目标 JVM 加载 Agent JAR，执行入口类的 agentmain 方法。
+                // 字节码增强：通过 Instrumentation API 修改目标类的字节码，实现方法拦截、监控等功能。
                 virtualMachine.loadAgent(arthasAgentPath,
                         configure.getArthasCore() + ";" + configure.toString());
             } catch (IOException e) {
