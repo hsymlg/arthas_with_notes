@@ -514,6 +514,8 @@ public class Bootstrap {
                     + File.separator + bootstrap.getUseVersion() + File.separator + "arthas");
             if (!specialVersionDir.exists()) {
                 // 如果本地不存在指定版本，则从远程下载
+                // 首先从远程仓库下载 Arthas 安装包（如arthas-packaging-3.6.0.zip），保存到临时文件tempFile。
+                // 例如，若savePath为~/.arthas/lib，arthasVersion为3.6.0，则解压目录为~/.arthas/lib/3.6.0/arthas/。
                 DownloadUtils.downArthasPackaging(bootstrap.getRepoMirror(), bootstrap.isUseHttp(),
                         bootstrap.getUseVersion(), ARTHAS_LIB_DIR.getAbsolutePath());
             }

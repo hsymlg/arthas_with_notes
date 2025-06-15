@@ -119,6 +119,22 @@ public class DownloadUtils {
     /**
      * 下载Arthas安装包并解压
      *
+     * 解压后，unzipDir目录下会生成 Arthas 的核心文件：
+     * ~/.arthas/lib/3.6.0/arthas/
+     * ├── arthas-agent.jar     # Java Agent启动器
+     * ├── arthas-core.jar      # 核心功能包
+     * ├── arthas-spy.jar       # 字节码增强工具
+     * ├── lib/                 # 依赖库
+     * │   ├── byte-buddy.jar
+     * │   ├── commons-cli.jar
+     * │   └── ...
+     * ├── bin/                 # 脚本文件
+     * │   ├── as.sh
+     * │   └── as.bat
+     * └── conf/                # 配置文件
+     *     ├── arthas.properties
+     *     └── logger.xml
+     *
      * @param repoMirror 镜像仓库地址
      * @param http 是否使用HTTP协议
      * @param arthasVersion Arthas版本号

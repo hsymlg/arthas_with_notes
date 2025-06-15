@@ -92,7 +92,7 @@ public class AgentBootstrap {
      * 扩展类加载器（Extension ClassLoader）：加载jre/lib/ext下的类。
      * 应用程序类加载器（AppClassLoader）：加载应用程序的类路径（classpath）中的类，包括主类（含main方法的类）。
      *
-     * 当使用-javaagent参数时，代理 JAR 包会被优先加载，其premain方法会在应用程序类加载器工作之前执行。
+     * 当使用-javaagent参数时，代理 JAR 包会被优先加载，其premain方法会在应用程序类加载器工作之前执行。（main方法里的agentLoader做到了优先加载）
      * 这使得代理可以在类加载阶段就介入，修改字节码（如 Arthas 的类增强），而不影响应用程序的正常逻辑。
      *
      * src/hotspot/share/prims/jvm.cpp
@@ -161,6 +161,11 @@ public class AgentBootstrap {
      * 主方法，处理代理启动逻辑
      * synchronized的原因：虽然 premain 是单线程调用的，但是agentmain也在调用main,Arthas 被多次 attach（例如用户误操作），可能导致多个线程同时调用 main 方法。
      *
+     * Arthas 作为 Java Agent，通过java -jar arthas.jar或java -agentlib方式附着到目标 JVM。此时：
+     * 主线程 (启动 Arthas 的线程) 属于应用程序的类加载环境，使用应用类加载器
+     * Arthas 自身的类由AgentClassLoader加载，与应用类加载器属于不同的类加载层级
+     * Arthas 通过 “子线程 + 专属 TCL” 的方式，在不干扰应用程序的前提下，确保自身逻辑在独立的类加载环境中执行
+     *
      * @param args 传递给代理的参数
      * @param inst Instrumentation对象，用于字节码增强
      */
@@ -187,6 +192,9 @@ public class AgentBootstrap {
                 args = "";
             }
             // 对参数进行URL解码
+            // 确保包含空格、& 等特殊字符的参数能被正确传递
+            // 假设java -javaagent:/path/to/arthas-agent.jar="/path/to/arthas-core.jar;option=value with space" -jar myapp.jar
+            // 参数中的空格和路径分隔符需要编码为"/path/to/arthas-core.jar;option=value%20with%20space"
             args = decodeArg(args);
 
             String arthasCoreJar;
@@ -210,6 +218,8 @@ public class AgentBootstrap {
                 // 输出找不到Arthas核心JAR包文件的日志信息
                 ps.println("Can not find arthas-core jar file from args: " + arthasCoreJarFile);
                 // 尝试从arthas-agent.jar所在目录查找Arthas核心JAR包
+                // 在 Arthas 的标准部署中，arthas-agent.jar 和 arthas-core.jar 通常位于同一目录下，因此通过获取 agent JAR 的父目录即可定位到核心 JAR。
+                // 位于同一目录的原因是详见方法com.taobao.arthas.boot.DownloadUtils.downArthasPackaging
                 CodeSource codeSource = AgentBootstrap.class.getProtectionDomain().getCodeSource();
                 if (codeSource != null) {
                     try {
@@ -240,6 +250,7 @@ public class AgentBootstrap {
             final ClassLoader agentLoader = getClassLoader(inst, arthasCoreJarFile);
 
             // 创建一个新的线程来执行绑定逻辑
+            //
             Thread bindingThread = new Thread() {
                 @Override
                 public void run() {
@@ -283,6 +294,11 @@ public class AgentBootstrap {
     /**
      * 绑定Arthas服务器
      *
+     * Arthas 通过自定义类加载器（如ArthasClassloader）加载自身的类，该类加载器与应用程序的类加载器（AppClassLoader）属于不同层级或隔离的上下文。
+     * 在编译期，编译器要求直接引用的类必须在当前类路径中存在，但 Arthas 的类通常不会被包含在应用程序的编译类路径中。
+     * 应用程序的类加载器（AppClassLoader）无法直接访问由 Arthas 自定义类加载器加载的类。如果在编译期直接引用ArthasBootstrap，会导致编译器报错（如ClassNotFoundException），因为编译期无法解析该类的引用。
+     * Agent 的工作机制要求在 JVM 启动后或运行时动态加载 Arthas 的类。通过反射（ClassLoader.loadClass和Method.invoke）可以在运行时由 Arthas 的类加载器动态加载ArthasBootstrap，避免编译期依赖。
+     *
      * @param inst      Instrumentation对象，用于字节码增强
      * @param agentLoader 用于加载Arthas相关类的ClassLoader
      * @param args      传递给服务端的参数
@@ -294,9 +310,9 @@ public class AgentBootstrap {
          * ArthasBootstrap bootstrap = ArthasBootstrap.getInstance(inst);
          * </pre>
          */
-        // 使用ClassLoader加载Arthas启动类
+        // 使用ClassLoader加载Arthas启动类（确保ArthasBootstrap类由正确的类加载器加载，避免类冲突）
         Class<?> bootstrapClass = agentLoader.loadClass(ARTHAS_BOOTSTRAP);
-        // 调用Arthas启动类的getInstance方法获取实例
+        // 调用Arthas启动类的getInstance方法获取实例（调用静态方法，第一个参数为null，传递Instrumentation实例和参数，初始化 Arthas 服务端）
         Object bootstrap = bootstrapClass.getMethod(GET_INSTANCE, Instrumentation.class, String.class).invoke(null, inst, args);
         // 调用Arthas启动类的isBind方法判断服务器是否绑定成功
         boolean isBind = (Boolean) bootstrapClass.getMethod(IS_BIND).invoke(bootstrap);
