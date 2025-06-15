@@ -1,26 +1,6 @@
 package java.arthas;
 
 /**
- * <pre>
- * 一个adviceId 是什么呢？ 就是一个trace/monitor/watch命令能对应上的一个id，比如一个类某个函数，它的 enter/end/exception 统一是一个id，分配完了就不会再分配。
- * 
- * 同样一个method，如果它trace之后，也会有一个 adviceId， 这个method里的所有invoke都是统一处理，认为是一个 adviceId 。 但如果有匹配到不同的 invoke的怎么分配？？
- * 好像有点难了。。
- * 
- * 其实就是把所有可以插入的地方都分类好，那么怎么分类呢？？ 或者是叫同一种匹配，就是同一种的 adviceId? 
- * 
- * 比如入参是有  class , method ,是固定的  ,  某个行号，或者 某个
- * 
- * aop插入的叫 adviceId ， command插入的叫 ListenerId？
- * 
- * 
- * 
- * </pre>
- * 
- * @author hengyunabc
- *
- */
-/**
  * SpyAPI 是 Arthas 实现字节码增强的核心接口，负责在目标方法中插入监控逻辑。
  * 该类被加载到 Bootstrap ClassLoader 中，确保所有类加载器都能访问它。
  * 通过静态方法提供切面通知点，允许在方法执行的不同阶段插入自定义逻辑。
@@ -155,15 +135,12 @@ public class SpyAPI {
     /**
      * Spy 接口的抽象实现，定义所有通知点的抽象方法
      */
-    public abstract class AbstractSpy {
-        public abstract void atEnter(Class<?> clazz, String methodInfo, Object target,
-                                     Object[] args);
+    public static abstract class AbstractSpy { // 修正：添加 static 修饰符
+        public abstract void atEnter(Class<?> clazz, String methodInfo, Object target, Object[] args);
 
-        public abstract void atExit(Class<?> clazz, String methodInfo, Object target, Object[] args,
-                                    Object returnObject);
+        public abstract void atExit(Class<?> clazz, String methodInfo, Object target, Object[] args, Object returnObject);
 
-        public abstract void atExceptionExit(Class<?> clazz, String methodInfo, Object target,
-                                             Object[] args, Throwable throwable);
+        public abstract void atExceptionExit(Class<?> clazz, String methodInfo, Object target, Object[] args, Throwable throwable);
 
         public abstract void atBeforeInvoke(Class<?> clazz, String invokeInfo, Object target);
 
@@ -176,7 +153,7 @@ public class SpyAPI {
      * 空实现的 Spy，所有方法不执行任何操作
      * 用于未启用监控或监控已关闭的场景
      */
-    static class NopSpy extends AbstractSpy {
+    static class NopSpy extends AbstractSpy { // 修正：确保继承关系正确
 
         @Override
         public void atEnter(Class<?> clazz, String methodInfo, Object target, Object[] args) {
@@ -184,14 +161,12 @@ public class SpyAPI {
         }
 
         @Override
-        public void atExit(Class<?> clazz, String methodInfo, Object target, Object[] args,
-                           Object returnObject) {
+        public void atExit(Class<?> clazz, String methodInfo, Object target, Object[] args, Object returnObject) {
             // 空实现
         }
 
         @Override
-        public void atExceptionExit(Class<?> clazz, String methodInfo, Object target, Object[] args,
-                                    Throwable throwable) {
+        public void atExceptionExit(Class<?> clazz, String methodInfo, Object target, Object[] args, Throwable throwable) {
             // 空实现
         }
 
