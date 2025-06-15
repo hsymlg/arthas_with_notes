@@ -243,6 +243,15 @@ public class ArthasBootstrap {
 
     /**
      * 初始化Spy工具，将Spy添加到BootstrapClassLoader
+     *
+     * 为什么不直接使用 Arthas 的类加载器？
+     * Arthas 的类加载器与应用类加载器是平行关系，相互不可见
+     * 若SpyAPI由 Arthas 类加载器加载，应用类无法直接引用
+     *
+     * 增强代码的执行环境
+     * 被增强的应用类在运行时需要直接调用SpyAPI方法
+     * 只有当SpyAPI位于 Bootstrap ClassLoader 时，所有类加载器层级才能无冲突地访问它
+     *
      * @throws Throwable 初始化过程中可能抛出的异常
      */
     private void initSpy() throws Throwable {
@@ -726,6 +735,15 @@ public class ArthasBootstrap {
     }
 
     /**
+     * 单例：双重检查锁定（DCL）的简化版，虽然代码中只有一次null检查，但由于方法整体同步，效果等同于：
+     * if (arthasBootstrap == null) {
+     *     synchronized (ArthasBootstrap.class) {
+     *         if (arthasBootstrap == null) {
+     *             arthasBootstrap = new ArthasBootstrap(...);
+     *         }
+     *     }
+     * }
+     *
      * 获取ArthasBootstrap单例实例（带映射参数）
      * @param instrumentation JVM instrumentation接口
      * @param args 启动参数映射

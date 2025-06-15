@@ -76,12 +76,27 @@ public class AgentBootstrap {
 
     /**
      * <pre>
-     * 1. 全局持有classloader用于隔离 Arthas 实现，防止多次attach重复初始化
+     * 1. 全局持有！！！！！！！！！classloader用于隔离 Arthas 实现，防止多次attach重复初始化
      * 2. ClassLoader在arthas停止时会被reset
      * 3. 如果ClassLoader一直没变，则 com.taobao.arthas.core.server.ArthasBootstrap#getInstance 返回结果一直是一样的
      * </pre>
+     *
+     * Arthas 的命令（如watch、trace、jad等）是模块化实现的，每个命令对应独立的类（如WatchCommand、TraceCommand）。这些类在初始化时不会被加载，而是在用户执行命令时按需加载。
+     * 延迟加载的优势
+     * 减少启动时间：初始化时只需加载核心框架类，无需预先加载所有命令类
+     * 节省内存：未使用的命令类不会被加载到 JVM 中
+     * 动态扩展性：支持在运行时添加或删除命令，无需重启 JVM
+     *
+     * 通过volatile关键字，Arthas 确保了：
+     * 类加载器初始化后对所有线程立即可见
+     * 禁止指令重排序，避免其他线程看到 "半初始化" 的类加载器
+     * 多线程环境下的内存可见性，保证系统稳定运行
      */
     // 定义一个volatile修饰的ClassLoader对象，用于加载Arthas相关类
+    // 如果arthasClassLoader没有volatile修饰，这些线程可能无法及时看到初始化后的实例，导致：
+    // NullPointerException：线程访问到null值
+    // ClassNotFoundException：使用错误的类加载器加载类
+    // 数据不一致：不同线程看到不同状态的类加载器
     private static volatile ClassLoader arthasClassLoader;
 
     /**
