@@ -190,7 +190,8 @@ public class ArthasBootstrap {
         // 3. 初始化日志系统，加载日志配置
         loggerContext = LogUtil.initLogger(arthasEnvironment);
 
-        // 4. 增强ClassLoader，解决类加载器中SpyAPI不可见的问题
+        // 4. 增强ClassLoader，解决类加载器中SpyAPI不可见的问题，某些框架（如 OSGi）使用自定义类加载机制，可能需要额外处理
+        // 通过enhanceClassLoader()方法修改类加载器的行为，确保SpyAPI可见
         enhanceClassLoader();
         // 5. 初始化基础Bean组件
         initBeans();
@@ -286,6 +287,10 @@ public class ArthasBootstrap {
 
     /**
      * 增强ClassLoader，解决类加载器中SpyAPI不可见的问题
+     *
+     * 某些框架（如 OSGi）使用自定义类加载机制，可能需要额外处理
+     * 通过enhanceClassLoader()方法修改类加载器的行为，确保SpyAPI可见
+     *
      * @throws IOException 读取类文件时的IO异常
      * @throws UnmodifiableClassException 类不可修改时的异常
      */

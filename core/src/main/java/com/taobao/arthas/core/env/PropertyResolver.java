@@ -17,107 +17,112 @@
 package com.taobao.arthas.core.env;
 
 /**
- * Interface for resolving properties against any underlying source.
+ * 属性解析器接口，定义了从底层源解析属性的方法
+ *
+ * 该接口提供了一系列方法用于获取、解析属性值，支持属性占位符解析
+ *
+ * 功能边界：仅负责属性的查询、类型转换、占位符解析
+ * 避免功能膨胀：不涉及属性源的管理（如添加、删除属性源），该职责由实现类承担
  *
  * @author Chris Beams
  * @author Juergen Hoeller
  * @since 3.1
- * @see Environment
- * @see PropertySourcesPropertyResolver
+ * @see Environment 环境接口，继承自PropertyResolver
+ * @see PropertySourcesPropertyResolver 属性源解析器实现
  */
 public interface PropertyResolver {
 
     /**
-     * Return whether the given property key is available for resolution, i.e. if
-     * the value for the given key is not {@code null}.
+     * 判断给定的属性键是否存在（即属性值不为null）
+     *
+     * @param key 属性键
+     * @return 属性是否存在
      */
     boolean containsProperty(String key);
 
     /**
-     * Return the property value associated with the given key, or {@code null} if
-     * the key cannot be resolved.
-     * 
-     * @param key the property name to resolve
-     * @see #getProperty(String, String)
-     * @see #getProperty(String, Class)
-     * @see #getRequiredProperty(String)
+     * 获取给定属性键对应的属性值，若属性不存在则返回null
+     *
+     * @param key 属性键
+     * @return 属性值，不存在时返回null
+     * @see #getProperty(String, String) 带默认值的属性获取
+     * @see #getProperty(String, Class) 带类型转换的属性获取
+     * @see #getRequiredProperty(String) 获取必须存在的属性
      */
     String getProperty(String key);
 
     /**
-     * Return the property value associated with the given key, or
-     * {@code defaultValue} if the key cannot be resolved.
-     * 
-     * @param key          the property name to resolve
-     * @param defaultValue the default value to return if no value is found
-     * @see #getRequiredProperty(String)
-     * @see #getProperty(String, Class)
+     * 获取给定属性键对应的属性值，若属性不存在则返回默认值
+     *
+     * @param key          属性键
+     * @param defaultValue 属性不存在时的默认值
+     * @return 属性值或默认值
+     * @see #getRequiredProperty(String) 获取必须存在的属性
+     * @see #getProperty(String, Class) 带类型转换的属性获取
      */
     String getProperty(String key, String defaultValue);
 
     /**
-     * Return the property value associated with the given key, or {@code null} if
-     * the key cannot be resolved.
-     * 
-     * @param key        the property name to resolve
-     * @param targetType the expected type of the property value
-     * @see #getRequiredProperty(String, Class)
+     * 获取给定属性键对应的属性值，并转换为指定类型，若属性不存在则返回null
+     *
+     * @param key        属性键
+     * @param targetType 目标类型
+     * @return 转换后的属性值，不存在时返回null
+     * @see #getRequiredProperty(String, Class) 获取必须存在的属性并转换类型
      */
     <T> T getProperty(String key, Class<T> targetType);
 
     /**
-     * Return the property value associated with the given key, or
-     * {@code defaultValue} if the key cannot be resolved.
-     * 
-     * @param key          the property name to resolve
-     * @param targetType   the expected type of the property value
-     * @param defaultValue the default value to return if no value is found
-     * @see #getRequiredProperty(String, Class)
+     * 获取给定属性键对应的属性值，转换为指定类型，若属性不存在则返回默认值
+     *
+     * @param key          属性键
+     * @param targetType   目标类型
+     * @param defaultValue 属性不存在时的默认值
+     * @return 转换后的属性值或默认值
+     * @see #getRequiredProperty(String, Class) 获取必须存在的属性并转换类型
      */
     <T> T getProperty(String key, Class<T> targetType, T defaultValue);
 
     /**
-     * Return the property value associated with the given key (never {@code null}).
-     * 
-     * @throws IllegalStateException if the key cannot be resolved
-     * @see #getRequiredProperty(String, Class)
+     * 获取必须存在的属性值（属性不存在时抛出异常）
+     *
+     * @param key 属性键
+     * @return 属性值
+     * @throws IllegalStateException 属性不存在时抛出异常
+     * @see #getRequiredProperty(String, Class) 获取必须存在的属性并转换类型
      */
     String getRequiredProperty(String key) throws IllegalStateException;
 
     /**
-     * Return the property value associated with the given key, converted to the
-     * given targetType (never {@code null}).
-     * 
-     * @throws IllegalStateException if the given key cannot be resolved
+     * 获取必须存在的属性值并转换为指定类型（属性不存在或类型转换失败时抛出异常）
+     *
+     * @param key        属性键
+     * @param targetType 目标类型
+     * @return 转换后的属性值
+     * @throws IllegalStateException 属性不存在或类型转换失败时抛出异常
      */
     <T> T getRequiredProperty(String key, Class<T> targetType) throws IllegalStateException;
 
     /**
-     * Resolve ${...} placeholders in the given text, replacing them with
-     * corresponding property values as resolved by {@link #getProperty}.
-     * Unresolvable placeholders with no default value are ignored and passed
-     * through unchanged.
-     * 
-     * @param text the String to resolve
-     * @return the resolved String (never {@code null})
-     * @throws IllegalArgumentException if given text is {@code null}
-     * @see #resolveRequiredPlaceholders
-     * @see org.springframework.util.SystemPropertyUtils#resolvePlaceholders(String)
+     * 解析字符串中的${...}占位符，替换为对应的属性值
+     * 未解析的占位符（无默认值）将保留不变
+     *
+     * @param text 包含占位符的字符串
+     * @return 解析后的字符串（不会为null）
+     * @throws IllegalArgumentException 输入text为null时抛出异常
+     * @see #resolveRequiredPlaceholders 解析必须成功的占位符
+     * @see org.springframework.util.SystemPropertyUtils#resolvePlaceholders(String) Spring系统属性解析工具
      */
     String resolvePlaceholders(String text);
 
     /**
-     * Resolve ${...} placeholders in the given text, replacing them with
-     * corresponding property values as resolved by {@link #getProperty}.
-     * Unresolvable placeholders with no default value will cause an
-     * IllegalArgumentException to be thrown.
-     * 
-     * @return the resolved String (never {@code null})
-     * @throws IllegalArgumentException if given text is {@code null} or if any
-     *                                  placeholders are unresolvable
-     * @see org.springframework.util.SystemPropertyUtils#resolvePlaceholders(String,
-     *      boolean)
+     * 解析字符串中的${...}占位符，替换为对应的属性值
+     * 未解析的占位符（无默认值）将抛出异常
+     *
+     * @param text 包含占位符的字符串
+     * @return 解析后的字符串（不会为null）
+     * @throws IllegalArgumentException 输入text为null或有未解析的占位符时抛出异常
+     * @see org.springframework.util.SystemPropertyUtils#resolvePlaceholders(String, boolean) Spring系统属性解析工具
      */
     String resolveRequiredPlaceholders(String text) throws IllegalArgumentException;
-
 }
