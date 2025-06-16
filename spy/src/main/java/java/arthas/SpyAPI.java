@@ -4,9 +4,44 @@ package java.arthas;
  * SpyAPI 是 Arthas 实现字节码增强的核心接口，负责在目标方法中插入监控逻辑。
  * 该类被加载到 Bootstrap ClassLoader 中，确保所有类加载器都能访问它。
  * 通过静态方法提供切面通知点，允许在方法执行的不同阶段插入自定义逻辑。
+ *
+ * SpyAPI (核心接口)
+ * ├── 静态变量
+ * │   ├── NOPSPY (空实现单例)
+ * │   ├── spyInstance (实际使用的 Spy 实例)
+ * │   └── INITED (初始化标志)
+ * │
+ * ├── 生命周期管理
+ * │   ├── init() (初始化)
+ * │   ├── destroy() (销毁)
+ * │   ├── isInited() (检查初始化状态)
+ * │   └── setNopSpy() (设置为空实现)
+ * │
+ * ├── 代理方法
+ * │   ├── getSpy() (获取当前 Spy 实例)
+ * │   └── setSpy() (设置 Spy 实例)
+ * │
+ * ├── 切面通知点
+ * │   ├── atEnter() (方法进入时)
+ * │   ├── atExit() (方法正常退出时)
+ * │   ├── atExceptionExit() (方法异常退出时)
+ * │   ├── atBeforeInvoke() (调用其他方法前)
+ * │   ├── atAfterInvoke() (调用其他方法后)
+ * │   └── atInvokeException() (调用其他方法异常时)
+ * │
+ * ├── 抽象接口
+ * │   └── AbstractSpy (定义所有通知点的抽象方法)
+ * │
+ * └── 默认实现
+ *     └── NopSpy (空实现，所有方法为空)
+ *
+ *  静态代理是一种设计模式，核心思想是通过一个代理对象控制对真实对象的访问。代理对象和真实对象实现相同的接口，客户端通过代理对象间接调用真实对象的方法，代理对象可以在调用前后添加额外逻辑（如日志、权限控制等）。
+ *  静态代理模式对原有代码无任何依赖，只需在字节码层面插入调用，应用代码无需知道 Spy 的存在，完全透明
+ *  客户端直接调用 SpyAPI.atEnter()，而不是通过实例，整个应用共享同一个 SpyAPI 代理入口，通过 spyInstance 指向不同的真实实现
+ *
  */
 public class SpyAPI {
-    // 默认实现为空操作，避免空指针异常
+    // 默认实现为空操作，避免空指针异常，用于未启用监控或监控已关闭的场景
     public static final AbstractSpy NOPSPY = new NopSpy();
     // 实际使用的 Spy 实例，使用 volatile 确保多线程可见性
     private static volatile AbstractSpy spyInstance = NOPSPY;
