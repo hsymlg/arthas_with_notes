@@ -190,6 +190,57 @@ public class ArthasBootstrap {
         // 3. 初始化日志系统，加载日志配置
         loggerContext = LogUtil.initLogger(arthasEnvironment);
 
+        /**
+         * 为什么BootstrapClassLoader已经能加载SpyAPI，还需要增强ClassLoader呢？
+         *
+         * 场景示例1：OSGi 的 BundleClassLoader
+         * 类加载器层级：BundleClassLoader的父类是AppClassLoader，而非BootstrapClassLoader
+         * 加载过程：
+         * 1.BundleClassLoader尝试加载SpyAPI
+         * 2.委托给父类AppClassLoader
+         * 3.AppClassLoader委托给ExtClassLoader
+         * 4.ExtClassLoader委托给BootstrapClassLoader
+         * 5.BootstrapClassLoader成功加载SpyAPI
+         * 问题出现：
+         * 尽管BootstrapClassLoader加载了SpyAPI，但BundleClassLoader加载的类在引用SpyAPI时可能抛出：
+         * java.lang.NoClassDefFoundError: java/arthas/SpyAPI
+         *
+         * 根本原因：
+         * BundleClassLoader在加载类时，可能使用了自定义的类验证逻辑或隔离策略，导致无法正确引用父类加载器中的类
+         *
+         * 场景示例2：类加载器隔离的典型案例：Tomcat 的 WebappClassLoader
+         * Tomcat类加载器层级简化示意：
+         * WebappClassLoader (自定义)
+         *   └─ Parent: AppClassLoader
+         *       └─ Parent: ExtClassLoader
+         *           └─ Parent: BootstrapClassLoader
+         * 1.Arthas 通过appendToBootstrapClassLoaderSearch将SpyAPI添加到 BootstrapClassLoader
+         * 2.Web 应用中的类com.example.Demo需要引用SpyAPI
+         * 3.Demo由WebappClassLoader加载，按双亲委派应能访问父类加载的SpyAPI
+         * 实际失败原因：
+         * Tomcat 的WebappClassLoader重写了loadClass方法，优先加载应用类路径的类，且可能包含：
+         * java
+         * // Tomcat类加载器中的部分逻辑（简化）
+         * @Override
+         * public Class<?> loadClass(String name) throws ClassNotFoundException {
+         *     // 先检查是否已加载
+         *     Class<?> c = findLoadedClass0(name);
+         *     if (c != null) {
+         *         return c;
+         *     }
+         *
+         *     // 优先从本地类路径加载（打破双亲委派）
+         *     c = findClass(name);
+         *     if (c != null) {
+         *         return c;
+         *     }
+         *
+         *     // 最后才委托给父类
+         *     return super.loadClass(name);
+         * }
+         * 由于SpyAPI不在应用类路径中，findClass失败，委托给父类加载成功，但类验证阶段可能因类加载器来源不同而失败。
+         */
+
         // 4. 增强ClassLoader，解决类加载器中SpyAPI不可见的问题，某些框架（如 OSGi）使用自定义类加载机制，可能需要额外处理
         // 通过enhanceClassLoader()方法修改类加载器的行为，确保SpyAPI可见
         enhanceClassLoader();
@@ -204,6 +255,7 @@ public class ArthasBootstrap {
             @Override
             public Thread newThread(Runnable r) {
                 // 创建守护线程，命名为"arthas-command-execute"
+                // 守护线程不会阻止 JVM 退出，当所有用户线程结束时自动终止，适合执行非关键的周期性任务（如日志刷新、状态检查）
                 final Thread t = new Thread(r, "arthas-command-execute");
                 t.setDaemon(true);
                 return t;
@@ -277,6 +329,8 @@ public class ArthasBootstrap {
                 // 获取arthas-spy.jar文件路径（位于core.jar同级目录）
                 File spyJarFile = new File(arthasCoreJarFile.getParentFile(), ARTHAS_SPY_JAR);
                 // 将spyJar添加到BootstrapClassLoader的搜索路径
+                // 该操作只能让 BootstrapClassLoader 加载spyJar中的类，但无法影响其他类加载器（如 AppClassLoader、自定义类加载器）。
+                // 需要看后面的增强方法com.taobao.arthas.core.server.ArthasBootstrap.enhanceClassLoader
                 instrumentation.appendToBootstrapClassLoaderSearch(new JarFile(spyJarFile));
             } else {
                 // 无法找到spyJar时抛出异常
@@ -288,46 +342,62 @@ public class ArthasBootstrap {
     /**
      * 增强ClassLoader，解决类加载器中SpyAPI不可见的问题
      *
-     * 某些框架（如 OSGi）使用自定义类加载机制，可能需要额外处理
-     * 通过enhanceClassLoader()方法修改类加载器的行为，确保SpyAPI可见
+     * 应用场景：
+     * 1. 自定义类加载器（如Tomcat WebappClassLoader、OSGi BundleClassLoader）
+     * 2. 重写了loadClass方法的类加载器（打破标准双亲委派）
+     * 3. 类加载器隔离策略严格的框架环境
      *
-     * @throws IOException 读取类文件时的IO异常
-     * @throws UnmodifiableClassException 类不可修改时的异常
+     * 技术原理：
+     * 通过ASM动态修改类加载器的字节码，在loadClass方法中注入SpyAPI加载逻辑
+     * 字节码增强逻辑详见仓库（https://github.com/alibaba/bytekit）
      */
     void enhanceClassLoader() throws IOException, UnmodifiableClassException {
-        // 若未配置需要增强的类加载器，则直接返回
+        // 1. 配置检查：若未指定需要增强的类加载器，直接返回
         if (configure.getEnhanceLoaders() == null) {
             return;
         }
-        // 解析需要增强的类加载器名称，存入集合
-        Set<String> loaders = new HashSet<String>();
+
+        // 2. 解析配置的类加载器名称，去重后存入集合
+        Set<String> loaders = new HashSet<>();
         for (String s : configure.getEnhanceLoaders().split(",")) {
-            loaders.add(s.trim());
+            loaders.add(s.trim()); // 支持配置多个类加载器，如"java.lang.ClassLoader,org.apache.catalina.loader.WebappClassLoader"
         }
 
-        // 读取ClassLoader_Instrument类的字节码（用于增强ClassLoader）
-        byte[] classBytes = IOUtils.getBytes(ArthasBootstrap.class.getClassLoader()
-                .getResourceAsStream(ClassLoader_Instrument.class.getName().replace('.', '/') + ".class"));
+        // 3. 加载ClassLoader增强工具类的字节码
+        //    ClassLoader_Instrument类包含对ClassLoader.loadClass方法的增强逻辑
+        String resourcePath = ClassLoader_Instrument.class.getName().replace('.', '/') + ".class";
+        byte[] classBytes = IOUtils.getBytes(
+                ArthasBootstrap.class.getClassLoader().getResourceAsStream(resourcePath)
+        );
 
-        // 创建类匹配器，匹配需要增强的类加载器
+        // 4. 创建类匹配器：用于指定需要增强的类加载器
+        //    SimpleClassMatcher支持按类名精确匹配或正则匹配
         SimpleClassMatcher matcher = new SimpleClassMatcher(loaders);
-        // 创建仪器配置，指定字节码和匹配器
-        InstrumentConfig instrumentConfig = new InstrumentConfig(AsmUtils.toClassNode(classBytes), matcher);
 
-        // 创建仪器解析结果，添加配置
+        // 5. 创建仪器配置：指定增强的字节码和匹配规则
+        //    AsmUtils.toClassNode将字节码转换为ASM的ClassNode对象，便于解析和修改
+        InstrumentConfig instrumentConfig = new InstrumentConfig(
+                AsmUtils.toClassNode(classBytes),
+                matcher
+        );
+
+        // 6. 创建仪器解析结果并添加配置
         InstrumentParseResult instrumentParseResult = new InstrumentParseResult();
         instrumentParseResult.addInstrumentConfig(instrumentConfig);
-        // 创建类加载器转换器
+
+        // 7. 创建字节码转换器：负责将增强逻辑应用到目标类加载器
         classLoaderInstrumentTransformer = new InstrumentTransformer(instrumentParseResult);
-        // 添加转换器到instrumentation，true表示重新转换已加载的类
+
+        // 8. 注册转换器到Instrumentation
+        //    参数true表示：对已加载的类也进行重新转换（热更新）
         instrumentation.addTransformer(classLoaderInstrumentTransformer, true);
 
-        // 触发类重新转换
+        // 9. 触发类加载器字节码重转换
         if (loaders.size() == 1 && loaders.contains(ClassLoader.class.getName())) {
-            // 若只增强ClassLoader类，直接重新转换ClassLoader
+            // 特殊情况：仅增强基础ClassLoader类
             instrumentation.retransformClasses(ClassLoader.class);
         } else {
-            // 否则按配置的类加载器列表触发重新转换
+            // 通用情况：按配置的类加载器列表批量转换
             InstrumentationUtils.trigerRetransformClasses(instrumentation, loaders);
         }
     }
@@ -462,86 +532,88 @@ public class ArthasBootstrap {
     }
 
     /**
-     * 绑定Arthas服务器，启动通信服务
-     * @param configure 配置信息
-     * @throws Throwable 启动过程中可能抛出的异常
+     * 绑定Arthas服务器，启动通信服务（Telnet/HTTP）
+     * 该方法是Arthas服务端启动的核心流程，包含配置检查、端口初始化、服务注册等关键步骤
+     *
+     * @param configure 配置信息，包含端口、认证信息等启动参数
+     * @throws Throwable 启动过程中可能抛出的异常（如端口占用、初始化失败等）
      */
     private void bind(Configure configure) throws Throwable {
-        // 记录启动时间
+        // 记录服务启动时间，用于统计启动耗时
         long start = System.currentTimeMillis();
 
-        // 检查并设置绑定状态，保证单例启动
+        // 原子性检查绑定状态，确保单例启动（CAS操作避免并发问题）
+        // isBindRef为AtomicBoolean类型，初始为false
         if (!isBindRef.compareAndSet(false, true)) {
-            throw new IllegalStateException("already bind");
+            throw new IllegalStateException("already bind"); // 已绑定则抛出异常
         }
 
-        // 初始化随机端口（若配置为0则自动分配）
+        // 自动分配随机Telnet端口（配置为0时）
         if (configure.getTelnetPort() != null && configure.getTelnetPort() == 0) {
-            int newTelnetPort = SocketUtils.findAvailableTcpPort();
-            configure.setTelnetPort(newTelnetPort);
-            logger().info("generate random telnet port: " + newTelnetPort);
+            int newTelnetPort = SocketUtils.findAvailableTcpPort(); // 查找可用TCP端口
+            configure.setTelnetPort(newTelnetPort); // 设置分配的端口
+            logger().info("generate random telnet port: " + newTelnetPort); // 日志记录随机端口
         }
+        // 自动分配随机HTTP端口（配置为0时）
         if (configure.getHttpPort() != null && configure.getHttpPort() == 0) {
-            int newHttpPort = SocketUtils.findAvailableTcpPort();
-            configure.setHttpPort(newHttpPort);
-            logger().info("generate random http port: " + newHttpPort);
+            int newHttpPort = SocketUtils.findAvailableTcpPort(); // 查找可用TCP端口
+            configure.setHttpPort(newHttpPort); // 设置分配的端口
+            logger().info("generate random http port: " + newHttpPort); // 日志记录随机端口
         }
-        // 尝试获取应用名称
+        // 自动获取应用名称（优先取项目名，其次取Spring应用名）
         if (configure.getAppName() == null) {
             configure.setAppName(System.getProperty(ArthasConstants.PROJECT_NAME,
                     System.getProperty(ArthasConstants.SPRING_APPLICATION_NAME, null)));
         }
 
-        // 启动隧道客户端（若配置了隧道服务器）
+        // 启动隧道客户端（用于连接远程隧道服务器）
         try {
             if (configure.getTunnelServer() != null) {
-                tunnelClient = new TunnelClient();
-                tunnelClient.setAppName(configure.getAppName());
-                tunnelClient.setId(configure.getAgentId());
-                tunnelClient.setTunnelServerUrl(configure.getTunnelServer());
-                tunnelClient.setVersion(ArthasBanner.version());
-                // 启动隧道客户端并等待连接
+                tunnelClient = new TunnelClient(); // 初始化隧道客户端
+                tunnelClient.setAppName(configure.getAppName()); // 设置应用名称
+                tunnelClient.setId(configure.getAgentId()); // 设置代理ID
+                tunnelClient.setTunnelServerUrl(configure.getTunnelServer()); // 设置隧道服务器地址
+                tunnelClient.setVersion(ArthasBanner.version()); // 设置Arthas版本
+                // 启动隧道客户端并等待连接（超时10秒）
                 ChannelFuture channelFuture = tunnelClient.start();
                 channelFuture.await(10, TimeUnit.SECONDS);
             }
         } catch (Throwable t) {
-            logger().error("start tunnel client error", t);
+            logger().error("start tunnel client error", t); // 记录隧道启动异常
         }
 
         try {
             // 配置Shell服务器选项
             ShellServerOptions options = new ShellServerOptions()
-                    .setInstrumentation(instrumentation)
-                    .setPid(PidUtils.currentLongPid())
-                    .setWelcomeMessage(ArthasBanner.welcome());
+                    .setInstrumentation(instrumentation) // 设置Java Instrumentation实例
+                    .setPid(PidUtils.currentLongPid()) // 设置当前进程PID
+                    .setWelcomeMessage(ArthasBanner.welcome()); // 设置欢迎消息
             if (configure.getSessionTimeout() != null) {
-                // 设置会话超时时间（毫秒）
+                // 转换会话超时时间为毫秒（配置单位为分钟）
                 options.setSessionTimeout(configure.getSessionTimeout() * 1000);
             }
 
-            // 初始化HTTP会话管理器
+            // 初始化HTTP会话管理器（管理客户端会话状态）
             this.httpSessionManager = new HttpSessionManager();
-            // 安全检查：当监听0.0.0.0且未设置密码时，强制生成密码
+            // 安全检查：当监听所有IP且未设置密码时强制生成随机密码
             if (IPUtils.isAllZeroIP(configure.getIp()) && StringUtils.isBlank(configure.getPassword())) {
                 String errorMsg = "Listening on 0.0.0.0 is very dangerous! External users can connect to your machine! "
                         + "No password is currently configured. " + "Therefore, a default password is generated, "
                         + "and clients need to use the password to connect!";
-                AnsiLog.error(errorMsg);
-                // 生成随机密码
-                configure.setPassword(StringUtils.randomString(64));
-                AnsiLog.error("Generated arthas password: " + configure.getPassword());
-
-                logger().error(errorMsg);
-                logger().info("Generated arthas password: " + configure.getPassword());
+                AnsiLog.error(errorMsg); // 输出错误级日志
+                configure.setPassword(StringUtils.randomString(64)); // 生成64位随机密码
+                AnsiLog.error("Generated arthas password: " + configure.getPassword()); // 输出生成的密码
+                logger().error(errorMsg); // 记录错误日志
+                logger().info("Generated arthas password: " + configure.getPassword()); // 记录密码信息
             }
 
-            // 初始化安全认证器
+            // 初始化安全认证器（处理客户端认证）
             this.securityAuthenticator = new SecurityAuthenticatorImpl(configure.getUsername(), configure.getPassword());
 
-            // 创建Shell服务器实例
+            // 创建Shell服务器实例（核心服务端组件）
             shellServer = new ShellServerImpl(options);
 
-            // 处理禁用命令配置
+            // 处理禁用命令配置（从配置中解析禁用的命令列表）
             List<String> disabledCommands = new ArrayList<String>();
             if (configure.getDisabledCommands() != null) {
                 String[] strings = StringUtils.tokenizeToStringArray(configure.getDisabledCommands(), ",");
@@ -549,29 +621,31 @@ public class ArthasBootstrap {
                     disabledCommands.addAll(Arrays.asList(strings));
                 }
             }
-            // 注册内置命令包
+            // 注册内置命令包（包含Arthas所有内置命令）
             BuiltinCommandPack builtinCommands = new BuiltinCommandPack(disabledCommands);
             List<CommandResolver> resolvers = new ArrayList<CommandResolver>();
             resolvers.add(builtinCommands);
 
-            // 初始化Netty工作线程组
+            // 初始化Netty工作线程组（处理网络IO事件）
             workerGroup = new NioEventLoopGroup(new DefaultThreadFactory("arthas-TermServer", true));
 
-            // 注册Telnet服务端（若配置了端口）
+            // 注册Telnet服务端（若配置了有效端口）
             if (configure.getTelnetPort() != null && configure.getTelnetPort() > 0) {
                 logger().info("try to bind telnet server, host: {}, port: {}.", configure.getIp(), configure.getTelnetPort());
+                // 注册Telnet服务器（使用HTTP兼容的Telnet实现）
                 shellServer.registerTermServer(new HttpTelnetTermServer(configure.getIp(), configure.getTelnetPort(),
                         options.getConnectionTimeout(), workerGroup, httpSessionManager));
             } else {
                 logger().info("telnet port is {}, skip bind telnet server.", configure.getTelnetPort());
             }
-            // 注册HTTP服务端（若配置了端口）
+            // 注册HTTP服务端（若配置了有效端口）
             if (configure.getHttpPort() != null && configure.getHttpPort() > 0) {
                 logger().info("try to bind http server, host: {}, port: {}.", configure.getIp(), configure.getHttpPort());
+                // 注册HTTP服务器（处理Web客户端连接）
                 shellServer.registerTermServer(new HttpTermServer(configure.getIp(), configure.getHttpPort(),
                         options.getConnectionTimeout(), workerGroup, httpSessionManager));
             } else {
-                // 隧道模式下即使未配置HTTP端口也注册服务端
+                // 隧道模式下即使未配置HTTP端口也注册服务端（兼容隧道通信）
                 if (configure.getTunnelServer() != null) {
                     shellServer.registerTermServer(new HttpTermServer(configure.getIp(), configure.getHttpPort(),
                             options.getConnectionTimeout(), workerGroup, httpSessionManager));
@@ -579,50 +653,51 @@ public class ArthasBootstrap {
                 logger().info("http port is {}, skip bind http server.", configure.getHttpPort());
             }
 
-            // 注册所有命令解析器
+            // 注册所有命令解析器（使命令可被解析执行）
             for (CommandResolver resolver : resolvers) {
                 shellServer.registerCommandResolver(resolver);
             }
 
-            // 启动服务端监听
+            // 启动服务端监听（BindHandler处理绑定结果）
             shellServer.listen(new BindHandler(isBindRef));
             if (!isBind()) {
-                // 绑定失败时抛出异常
+                // 绑定失败时抛出异常（端口可能被占用）
                 throw new IllegalStateException("Arthas failed to bind telnet or http port! Telnet port: "
                         + String.valueOf(configure.getTelnetPort()) + ", http port: "
                         + String.valueOf(configure.getHttpPort()));
             }
 
-            // 初始化会话管理器和HTTP API处理器
+            // 初始化会话管理器（管理客户端会话生命周期）
             sessionManager = new SessionManagerImpl(options, shellServer.getCommandManager(), shellServer.getJobController());
+            // 初始化HTTP API处理器（处理HTTP接口请求）
             httpApiHandler = new HttpApiHandler(historyManager, sessionManager);
 
-            // 记录服务启动信息
+            // 记录服务启动信息（监听地址、端口、超时时间）
             logger().info("as-server listening on network={};telnet={};http={};timeout={};", configure.getIp(),
                     configure.getTelnetPort(), configure.getHttpPort(), options.getConnectionTimeout());
 
-            // 异步上报启动统计信息
+            // 异步上报启动统计信息（用于Arthas使用情况分析）
             if (configure.getStatUrl() != null) {
                 logger().info("arthas stat url: {}", configure.getStatUrl());
             }
-            UserStatUtil.setStatUrl(configure.getStatUrl());
-            UserStatUtil.setAgentId(configure.getAgentId());
-            UserStatUtil.arthasStart();
+            UserStatUtil.setStatUrl(configure.getStatUrl()); // 设置统计URL
+            UserStatUtil.setAgentId(configure.getAgentId()); // 设置代理ID
+            UserStatUtil.arthasStart(); // 上报启动事件
 
-            // 初始化SpyAPI
+            // 初始化SpyAPI（Arthas核心监控接口）
             try {
-                SpyAPI.init();
+                SpyAPI.init(); // 标记SpyAPI已初始化
             } catch (Throwable e) {
-                // 初始化失败时忽略异常
+                // 初始化失败时忽略异常（可能已被其他方式初始化）
             }
 
-            // 记录启动耗时
+            // 记录启动耗时（从start到当前的时间差）
             logger().info("as-server started in {} ms", System.currentTimeMillis() - start);
         } catch (Throwable e) {
             // 启动过程中出错时记录错误并销毁资源
             logger().error("Error during start as-server", e);
-            destroy();
-            throw e;
+            destroy(); // 调用销毁方法释放资源
+            throw e; // 重新抛出异常
         }
     }
 

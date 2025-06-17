@@ -42,6 +42,7 @@ public class Configure {
 
     /**
      * 需要被增强的ClassLoader的全类名，多个用英文 , 分隔
+     * 注意，可以从从arthas.properties或环境变量中读取，不需要用set方法
      */
     private String enhanceLoaders;
 
