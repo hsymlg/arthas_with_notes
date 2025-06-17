@@ -12,166 +12,84 @@ import com.taobao.arthas.core.shell.term.Tty;
  * @author <a href="mailto:julien@julienviet.com">Julien Viet</a>
  */
 public interface Process {
-    /**
-     * @return the current process status
-     */
+    // 获取当前进程状态
     ExecStatus status();
 
-    /**
-     * @return the process exit code when the status is {@link ExecStatus#TERMINATED} otherwise {@code null}
-     */
+    // 获取进程退出码，仅当状态为 TERMINATED 时有效
     Integer exitCode();
 
-    /**
-     * Set the process tty.
-     *
-     * @param tty the process tty
-     * @return this object
-     */
+    // 设置进程的 TTY
     Process setTty(Tty tty);
 
-    /**
-     * @return the process tty
-     */
+    // 获取进程的 TTY
     Tty getTty();
 
-    /**
-     * Set the process session
-     *
-     * @param session the process session
-     * @return this object
-     */
+    // 设置进程的会话
     Process setSession(Session session);
 
-    /**
-     * @return the process session
-     */
+    // 获取进程的会话
     Session getSession();
 
-    /**
-     * Set an handler for being notified when the process terminates.
-     *
-     * @param handler the handler called when the process terminates.
-     * @return this object
-     */
+    // 设置进程终止时的处理程序
     Process terminatedHandler(Handler<Integer> handler);
 
-    /**
-     * Run the process.
-     */
+    // 运行进程
     void run();
 
-    /**
-     * Run the process.
-     */
+    // 运行进程，指定是否为前台进程
     void run(boolean foreground);
 
-    /**
-     * Attempt to interrupt the process.
-     *
-     * @return true if the process caught the signal
-     */
+    // 尝试中断进程
     boolean interrupt();
 
-    /**
-     * Attempt to interrupt the process.
-     *
-     * @param completionHandler handler called after interrupt callback
-     * @return true if the process caught the signal
-     */
+    // 尝试中断进程，并在中断回调后调用完成处理程序
     boolean interrupt(Handler<Void> completionHandler);
 
-    /**
-     * Suspend the process.
-     */
+    // 恢复进程
     void resume();
 
-    /**
-     * Suspend the process.
-     */
+    // 恢复进程，指定是否为前台进程
     void resume(boolean foreground);
 
-    /**
-     * Suspend the process.
-     *
-     * @param completionHandler handler called after resume callback
-     */
+    // 恢复进程，并在恢复回调后调用完成处理程序
     void resume(Handler<Void> completionHandler);
 
-    /**
-     * Suspend the process.
-     *
-     * @param completionHandler handler called after resume callback
-     */
+    // 恢复进程，指定是否为前台进程，并在恢复回调后调用完成处理程序
     void resume(boolean foreground, Handler<Void> completionHandler);
 
-    /**
-     * Resume the process.
-     */
+    // 暂停进程
     void suspend();
 
-    /**
-     * Resume the process.
-     *
-     * @param completionHandler handler called after suspend callback
-     */
+    // 暂停进程，并在暂停回调后调用完成处理程序
     void suspend(Handler<Void> completionHandler);
 
-    /**
-     * Terminate the process.
-     */
+    // 终止进程
     void terminate();
 
-    /**
-     * Terminate the process.
-     *
-     * @param completionHandler handler called after end callback
-     */
+    // 终止进程，并在结束回调后调用完成处理程序
     void terminate(Handler<Void> completionHandler);
 
-    /**
-     * Set the process in background.
-     */
+    // 将进程设置为后台运行
     void toBackground();
 
-    /**
-     * Set the process in background.
-     *
-     * @param completionHandler handler called after background callback
-     */
+    // 将进程设置为后台运行，并在后台回调后调用完成处理程序
     void toBackground(Handler<Void> completionHandler);
 
-    /**
-     * Set the process in foreground.
-     */
+    // 将进程设置为前台运行
     void toForeground();
 
-    /**
-     * Set the process in foreground.
-     *
-     * @param completionHandler handler called after foreground callback
-     */
+    // 将进程设置为前台运行，并在前台回调后调用完成处理程序
     void toForeground(Handler<Void> completionHandler);
 
-    /**
-     * Execution times
-     */
+    // 获取进程的执行次数
     int times();
 
-    /**
-     * Build time
-     */
+    // 获取进程的启动时间
     Date startTime();
 
-    /**
-     * Get cache file location
-     */
+    // 获取进程的缓存文件位置
     String cacheLocation();
 
-    /**
-     * Set job id
-     * 
-     * @param jobId job id
-     */
+    // 设置进程所属的作业 ID
     void setJobId(int jobId);
 }
