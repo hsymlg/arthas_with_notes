@@ -49,6 +49,7 @@ public class JvmCommand extends AnnotatedCommand {
 
     /**
      * 处理命令的核心方法，当命令被执行时会调用该方法
+     * 接口作为方法参数是 Java 中实现多态和设计模式的核心机制，常用于回调、策略模式、事件监听、依赖注入等场景。
      *
      * @param process 命令处理对象，用于添加结果和结束命令处理
      */
