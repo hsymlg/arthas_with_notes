@@ -30,6 +30,8 @@ import java.util.Map;
 // 继承 AnnotatedCommand 类，这是一个抽象类，需要实现 process 方法
 public class JvmCommand extends AnnotatedCommand {
 
+    // ManagementFactory相关指标的应用（https://www.alibabacloud.com/help/zh/arms/application-monitoring/developer-reference/jvm-metrics）
+    // JVM内存监控（https://www.alibabacloud.com/help/zh/arms/application-monitoring/developer-reference/jvm-monitoring-memory-details?spm=a2c63.p38356.0.i0）
     // 获取运行时管理 Bean，用于获取 JVM 的运行时信息
     private final RuntimeMXBean runtimeMXBean = ManagementFactory.getRuntimeMXBean();
     // 获取类加载管理 Bean，用于获取类加载相关信息
